@@ -1,4 +1,3 @@
-// Store the college data
 let collegeData = [];
 let currentFilteredData = [];
 let currentRenderedData = [];
@@ -7,14 +6,11 @@ let currentCategoryValue = null;
 let currentStateValue = null;
 let currentGenderValue = null;
 
-// Initialize student count from localStorage
 let studentCount = parseInt(localStorage.getItem("studentCount")) || 95334;
 
-// Form and results section elements (global so displayResults can access)
 let formSection = null;
 let resultsSection = null;
 
-// Helper function to determine college type from institute name
 function getCollegeType(instituteName) {
     const name = instituteName.toLowerCase().replace(/\s+/g, " ");
     if (name.includes("indian institute of technology") || (name.includes("iit") && !name.includes("iiit"))) return "IIT";
@@ -26,10 +22,28 @@ function getCollegeType(instituteName) {
 function getPreferredBranches() {
     const selected = Array.from(document.querySelectorAll(".branch-filter:checked"));
     if (selected.length === 0) return [];
-    return selected.flatMap(item => {
-        const values = item.getAttribute("data-values") || item.value || "";
-        return values.split("|").map(v => v.trim().toLowerCase()).filter(Boolean);
+    
+    let branches = [];
+    selected.forEach(item => {
+        let val = item.getAttribute("data-values") || item.value;
+        
+        if (!val || val.toLowerCase() === "on") {
+            const label = item.closest("label");
+            if (label) {
+                val = label.textContent.trim().toLowerCase();
+            } else if (item.nextSibling && item.nextSibling.nodeType === 3) {
+                val = item.nextSibling.textContent.trim().toLowerCase();
+            } else if (item.id) {
+                const forLabel = document.querySelector(`label[for="${item.id}"]`);
+                if (forLabel) val = forLabel.textContent.trim().toLowerCase();
+            }
+        }
+        
+        if (val && val !== "on") {
+            branches.push(...val.split("|").map(v => v.trim().toLowerCase()).filter(Boolean));
+        }
     });
+    return branches;
 }
 
 function buildBaseMatches(rankValue, category, gender) {
@@ -40,15 +54,37 @@ function buildBaseMatches(rankValue, category, gender) {
 
     const matches = collegeData.filter(college => {
         const closing = Number(college["Closing Rank"]);
-        const rankMatch = rankValue <= closing;
+        const tolerance = closing * 0.10;
+        
+        const rankMatch = rankValue <= (closing + tolerance);
         const categoryMatch = college["Seat Type"] === seatType;
         const collegeType = college.type || getCollegeType(college["Institute"]);
         const notIIT = collegeType !== "IIT";
+        
         const programName = (college["Academic Program Name"] || "").toLowerCase();
         const notArchitecture = !programName.includes("architecture");
-        const branchMatch = preferredBranches.length === 0
-            ? true
-            : preferredBranches.some(branch => programName.includes(branch));
+        
+        const branchMatch = preferredBranches.length === 0 ? true : preferredBranches.some(branch => {
+            if (branch.includes("cs") || branch.includes("computer")) {
+                return programName.includes("computer");
+            }
+            if (branch.includes("it") || branch.includes("information")) {
+                return programName.includes("information technology");
+            }
+            if (branch.includes("ece") || branch.includes("communication")) {
+                return programName.includes("communication") || programName.includes("electronics");
+            }
+            if (branch.includes("mech")) {
+                return programName.includes("mechanical");
+            }
+            if (branch.includes("civil")) {
+                return programName.includes("civil");
+            }
+            if (branch.includes("ee") || branch.includes("electrical")) {
+                return programName.includes("electrical") && !programName.includes("electronics");
+            }
+            return programName.includes(branch);
+        });
 
         let genderMatch = false;
         const dbGender = college["Gender"];
@@ -73,10 +109,27 @@ function hashString(value) {
 }
 
 function getProbability(rank, opening, closing) {
-    if (!Number.isFinite(rank) || !Number.isFinite(opening) || !Number.isFinite(closing)) return "LOW";
-    if (rank <= opening) return "HIGH";
-    const mid = opening + (closing - opening) * 0.5;
-    return rank <= mid ? "MEDIUM" : "LOW";
+    if (!Number.isFinite(rank) || !Number.isFinite(opening) || !Number.isFinite(closing)) {
+        return { status: "UNLIKELY", score: 0 };
+    }
+    
+    let tolerance = closing * 0.10;
+    
+    if (rank <= opening) {
+        return { status: "HIGH", score: 95 };
+    }
+    
+    if (rank > opening && rank <= closing) {
+        let score = 50 + ((closing - rank) / (closing - opening)) * 40;
+        return { status: "MEDIUM", score: Math.round(score) };
+    }
+    
+    if (rank > closing && rank <= (closing + tolerance)) {
+        let score = 10 + ((closing + tolerance - rank) / tolerance) * 40;
+        return { status: "LOW", score: Math.round(score) };
+    }
+    
+    return { status: "UNLIKELY", score: 0 };
 }
 
 function getAvgPackage(college) {
@@ -109,23 +162,24 @@ function getPlacement(college) {
     return min + (seed % (max - min + 1));
 }
 
-function getProbabilityBadge(probability) {
+function getProbabilityBadge(status, score) {
     const styles = {
         HIGH: "color: #166534; background: #dcfce7;",
         MEDIUM: "color: #92400e; background: #fef3c7;",
-        LOW: "color: #991b1b; background: #fee2e2;"
+        LOW: "color: #991b1b; background: #fee2e2;",
+        UNLIKELY: "color: #4b5563; background: #f3f4f6;"
     };
     const labels = {
         HIGH: "High",
         MEDIUM: "Medium",
-        LOW: "Low"
+        LOW: "Low",
+        UNLIKELY: "Unlikely"
     };
-    const style = styles[probability] || styles.LOW;
-    const label = labels[probability] || "Low";
-    return `<span style="${style} padding: 4px 8px; border-radius: 4px; font-weight: 600;">${label}</span>`;
+    const style = styles[status] || styles.UNLIKELY;
+    const label = labels[status] || "Unlikely";
+    return `<span style="${style} padding: 4px 8px; border-radius: 4px; font-weight: 600;">${label} (${score}%)</span>`;
 }
 
-// Load college data from JSON file  
 async function loadCollegeData() {
     try {
         const response = await fetch('file.json');
@@ -134,7 +188,6 @@ async function loadCollegeData() {
         if (!Array.isArray(data) || data.length === 0) throw new Error("Invalid data format");
         
         collegeData = data;
-        // Add type field to each college based on institute name
         collegeData.forEach(college => {
             college.type = getCollegeType(college["Institute"]);
         });
@@ -143,7 +196,6 @@ async function loadCollegeData() {
     }
 }
 
-// Fallback sample data - MUST use correct JSON field names
 function loadSampleData() {
     collegeData = [
         {
@@ -185,7 +237,6 @@ function loadSampleData() {
     ];
 }
 
-// Function to display results
 function displayResults(rank, category, state, gender) {
     const rankValue = Number(rank);
     if (!Number.isFinite(rankValue)) {
@@ -198,7 +249,6 @@ function displayResults(rank, category, state, gender) {
     currentStateValue = state;
     currentGenderValue = gender;
 
-    // Update user details card
     document.getElementById("displayRank").textContent = rank;
     document.getElementById("displayCategory").textContent = category;
     document.getElementById("displayState").textContent = state;
@@ -206,23 +256,18 @@ function displayResults(rank, category, state, gender) {
 
     currentFilteredData = buildBaseMatches(rankValue, category, gender);
 
-    // Display all filtered colleges
     renderTable(currentFilteredData);
 
-    // Update eligible count
     document.getElementById("eligibleCount").textContent = currentFilteredData.length;
 
-    // Increment student count
     studentCount++;
     localStorage.setItem("studentCount", studentCount);
     updateStudentCountDisplay();
 
-    // Switch views
     formSection.classList.add("hidden");
     resultsSection.classList.remove("hidden");
 }
 
-// Function to update student count display in both sections
 function updateStudentCountDisplay() {
     const footnotesInForm = document.querySelectorAll(".form-section .footnote span:last-child");
     const footnotesInResults = document.querySelectorAll(".results-section .footnote span:last-child");
@@ -233,15 +278,10 @@ function updateStudentCountDisplay() {
     footnotesInResults.forEach(el => el.textContent = text);
 }
 
-// Initialize event listeners and load data when page loads
 document.addEventListener("DOMContentLoaded", function() {
-    
-    // Load college data asynchronously
     loadCollegeData();
-    
     updateStudentCountDisplay();
     
-    // Get form elements
     const rankInput = document.getElementById("rankInput");
     const categoryInput = document.getElementById("categoryInput");
     const stateInput = document.getElementById("stateInput");
@@ -249,15 +289,11 @@ document.addEventListener("DOMContentLoaded", function() {
     const predictButton = document.getElementById("predictButton");
     const editButton = document.getElementById("editButton");
 
-
-    // Get section elements (set global variables)
     formSection = document.getElementById("formSection");
     resultsSection = document.getElementById("resultsSection");
 
-    // Predict button click handler
     if (predictButton) {
         predictButton.addEventListener("click", function() {
-            // Validation
             const rank = rankInput.value;
             const category = categoryInput.value;
             const state = stateInput.value;
@@ -268,12 +304,10 @@ document.addEventListener("DOMContentLoaded", function() {
                 return;
             }
 
-            // Display results
             displayResults(rank, category, state, gender.value);
         });
     }
 
-    // Edit button click handler
     if (editButton) {
         editButton.addEventListener("click", function() {
             formSection.classList.remove("hidden");
@@ -281,7 +315,6 @@ document.addEventListener("DOMContentLoaded", function() {
         });
     }
 
-    // Print button click handler
     const printButton = document.getElementById("printButton");
     if (printButton) {
         printButton.addEventListener("click", function() {
@@ -293,7 +326,6 @@ document.addEventListener("DOMContentLoaded", function() {
         });
     }
 
-    // Setup filter listeners
     const probFilters = document.querySelectorAll(".prob-filter");
     probFilters.forEach(filter => {
         filter.addEventListener("change", applyFilters);
@@ -309,7 +341,6 @@ document.addEventListener("DOMContentLoaded", function() {
         filter.addEventListener("change", applyFilters);
     });
 
-    // Clear all filters
     const clearAllBtn = document.querySelector(".clear-all");
     if (clearAllBtn) {
         clearAllBtn.addEventListener("click", function() {
@@ -322,31 +353,29 @@ document.addEventListener("DOMContentLoaded", function() {
         });
     }
 
-    // Quick filter buttons
     const quickFilterBtns = document.querySelectorAll(".quick-filter-btn");
     quickFilterBtns.forEach(btn => {
         btn.addEventListener("click", function(e) {
             e.preventDefault();
             const filterType = this.textContent.trim();
             
-            // Clear existing filters and search
             document.querySelectorAll(".prob-filter").forEach(f => f.checked = false);
             document.querySelectorAll(".type-filter").forEach(f => f.checked = false);
             document.getElementById("searchCollege").value = "";
 
-        let filteredData = currentFilteredData.slice();
+            let filteredData = currentFilteredData.slice();
 
-        if (filterType === "Top 5 NITs") {
-            filteredData = filteredData
-                .filter(c => (c.type || getCollegeType(c["Institute"])) === "NIT")
-                .sort((a, b) => a["Opening Rank"] - b["Opening Rank"])
-                .slice(0, 5);
-        } else if (filterType === "Top 10 NITs") {
-            filteredData = filteredData
-                .filter(c => (c.type || getCollegeType(c["Institute"])) === "NIT")
-                .sort((a, b) => a["Opening Rank"] - b["Opening Rank"])
-                .slice(0, 10);
-        } else if (filterType === "CS & IT Branches") {
+            if (filterType === "Top 5 NITs") {
+                filteredData = filteredData
+                    .filter(c => (c.type || getCollegeType(c["Institute"])) === "NIT")
+                    .sort((a, b) => a["Opening Rank"] - b["Opening Rank"])
+                    .slice(0, 5);
+            } else if (filterType === "Top 10 NITs") {
+                filteredData = filteredData
+                    .filter(c => (c.type || getCollegeType(c["Institute"])) === "NIT")
+                    .sort((a, b) => a["Opening Rank"] - b["Opening Rank"])
+                    .slice(0, 10);
+            } else if (filterType === "CS & IT Branches") {
                 filteredData = filteredData.filter(c => 
                     c["Academic Program Name"].toLowerCase().includes("computer") || 
                     c["Academic Program Name"].toLowerCase().includes("information technology") || 
@@ -359,9 +388,6 @@ document.addEventListener("DOMContentLoaded", function() {
                            branch.includes("chemical") || branch.includes("electrical") || 
                            branch.includes("production");
                 });
-            } else if (filterType === "Near My Domicile State") {
-                // For now, show all - can be extended with state data
-                filteredData = filteredData;
             }
 
             renderTable(filteredData);
@@ -369,19 +395,16 @@ document.addEventListener("DOMContentLoaded", function() {
         });
     });
 
-    // Search functionality
     const searchBox = document.getElementById("searchCollege");
     if (searchBox) {
         searchBox.addEventListener("input", function() {
             const searchTerm = this.value.toLowerCase().trim();
             
             if (searchTerm === "") {
-                // If search is cleared, show current filtered data
                 renderTable(currentFilteredData);
                 return;
             }
             
-            // Search within currentFilteredData
             const filteredData = currentFilteredData.filter(college => 
                 college["Institute"].toLowerCase().includes(searchTerm) || 
                 college["Academic Program Name"].toLowerCase().includes(searchTerm)
@@ -393,7 +416,6 @@ document.addEventListener("DOMContentLoaded", function() {
     }
 });
 
-// Function to render table
 function renderTable(data) {
     currentRenderedData = Array.isArray(data) ? data : [];
 
@@ -409,7 +431,8 @@ function renderTable(data) {
         const row = document.createElement("tr");
         const opening = Number(college["Opening Rank"]);
         const closing = Number(college["Closing Rank"]);
-        const probability = getProbability(currentRankValue, opening, closing);
+        
+        const probObj = getProbability(currentRankValue, opening, closing);
         const avgPackage = getAvgPackage(college);
         const placement = getPlacement(college);
         
@@ -418,7 +441,7 @@ function renderTable(data) {
             <td>${college["Academic Program Name"]}</td>
             <td>₹${avgPackage} LPA</td>
             <td>${placement}%</td>
-            <td>${getProbabilityBadge(probability)}</td>
+            <td>${getProbabilityBadge(probObj.status, probObj.score)}</td>
             <td>${opening}</td>
             <td>${closing}</td>
             <td><a href="#" onclick="event.preventDefault()">Details</a></td>
@@ -427,7 +450,6 @@ function renderTable(data) {
     });
 }
 
-// Function to render table
 function applyFilters() {
     if (!Number.isFinite(currentRankValue)) return;
 
@@ -444,8 +466,9 @@ function applyFilters() {
     let filteredData = currentFilteredData.filter(college => {
         const opening = Number(college["Opening Rank"]);
         const closing = Number(college["Closing Rank"]);
-        const probability = getProbability(currentRankValue, opening, closing);
-        const probMatch = selectedProbabilities.length === 0 || selectedProbabilities.includes(probability);
+        const probObj = getProbability(currentRankValue, opening, closing);
+        
+        const probMatch = selectedProbabilities.length === 0 || selectedProbabilities.includes(probObj.status);
         const collegeType = college.type || getCollegeType(college["Institute"]);
         const typeMatch = selectedTypes.length === 0 || selectedTypes.includes(collegeType);
         const notIIT = collegeType !== "IIT";
@@ -459,8 +482,6 @@ function applyFilters() {
     document.getElementById("eligibleCount").textContent = filteredData.length;
     document.getElementById("searchCollege").value = "";
 }
-
-// Search functionality removed - now in DOMContentLoaded
 
 function escapeHtml(str) {
     return String(str)
@@ -495,13 +516,15 @@ function openPrintWindow(data) {
 
         const searchTerm = document.getElementById("searchCollege")?.value?.trim() || "";
 
-        // Build table rows
         let rowsHtml = "";
         for (let college of safeData) {
             const opening = Number(college["Opening Rank"]) || 0;
             const closing = Number(college["Closing Rank"]) || 0;
-            const probability = getProbability(currentRankValue, opening, closing);
-            const probLabel = probability === "HIGH" ? "High" : probability === "MEDIUM" ? "Medium" : "Low";
+            const probObj = getProbability(currentRankValue, opening, closing);
+            
+            const probBaseLabel = probObj.status === "HIGH" ? "High" : probObj.status === "MEDIUM" ? "Medium" : probObj.status === "LOW" ? "Low" : "Unlikely";
+            const probLabel = `${probBaseLabel} (${probObj.score}%)`;
+            
             const avgPackage = getAvgPackage(college);
             const placement = getPlacement(college);
 
@@ -515,14 +538,12 @@ function openPrintWindow(data) {
             rowsHtml = `<tr><td colspan="7" style="text-align:center;">No rows to print.</td></tr>`;
         }
 
-        // Open popup
         const win = window.open("", "_blank");
         if (!win) {
             alert("Popup blocked. Please allow popups to print.");
             return;
         }
 
-        // Write HTML document
         const htmlContent = `<!DOCTYPE html>
 <html>
 <head>
@@ -588,7 +609,6 @@ function openPrintWindow(data) {
     }
 }
 
-// FALLBACK: Direct button click handler as backup
 document.addEventListener("DOMContentLoaded", function() {
     const btn = document.getElementById("predictButton");
     if (btn && !btn.onclick) {
