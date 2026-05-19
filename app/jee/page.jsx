@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from 'react';
+import collegeDataRaw from '../../file.json';
 
 export default function JeePredictor() {
   const [collegeData, setCollegeData] = useState([]);
@@ -10,20 +11,15 @@ export default function JeePredictor() {
   const [branchText, setBranchText] = useState('');
 
   useEffect(() => {
-    fetch('/file.json')
-      .then(res => res.json())
-      .then(data => {
-        const enrichedData = data.map(college => {
-          let type = "GFTI";
-          const name = (college["Institute"] || "").toLowerCase();
-          if (name.includes("indian institute of technology") || (name.includes("iit") && !name.includes("iiit"))) type = "IIT";
-          else if (name.includes("information technology") || name.includes("iiit")) type = "IIIT";
-          else if (name.includes("national institute of technology") || name.includes("nit")) type = "NIT";
-          return { ...college, type };
-        });
-        setCollegeData(enrichedData);
-      })
-      .catch(err => console.error("Data load failed", err));
+    const enrichedData = collegeDataRaw.map(college => {
+      let type = "GFTI";
+      const name = (college["Institute"] || "").toLowerCase();
+      if (name.includes("indian institute of technology") || (name.includes("iit") && !name.includes("iiit"))) type = "IIT";
+      else if (name.includes("information technology") || name.includes("iiit")) type = "IIIT";
+      else if (name.includes("national institute of technology") || name.includes("nit")) type = "NIT";
+      return { ...college, type };
+    });
+    setCollegeData(enrichedData);
   }, []);
 
   function getProbability(userRank, opening, closing) {
